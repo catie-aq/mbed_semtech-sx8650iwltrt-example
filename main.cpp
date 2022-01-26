@@ -16,6 +16,7 @@ namespace {
 /* Definitions PIN */
 static SX8650IWLTRT sx8650iwltrt(I2C1_SDA, I2C1_SCL);
 static DigitalOut led1(LED1);
+static InteruptIn NIRQ(DIO18);
 SWO swo;
 
 
@@ -27,20 +28,23 @@ int main()
     sx8650iwltrt.soft_reset();
     printf("Soft Reset done\n\n");
     printf("Default Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
-    sx8650iwltrt.set_rate(Rate::RATE_2K_cps);
     sx8650iwltrt.set_condirq(RegCtrl1Address::CONDIRQ);
-    sx8650iwltrt.set_mode(Mode::ManAuto);
+    sx8650iwltrt.set_rate(Rate::RATE_2K_cps);
+    sx8650iwltrt.set_mode(Mode::PenTrg);
     printf("SX8650IWLTRT in Automatic mode\n\n");
     printf("Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
-    printf("Condriq status : %u\n\n",static_cast<uint8_t>(sx8650iwltrt.condirq()));
-    
+    // printf("Status CONDIRQ Interrupt : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.condirq()));
+    printf("Status CONVIRQ Interrupt : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.convirq()));
 
     while(1){
         printf("-----------------\n\n");
         printf("Enter in loop \n\n");
         led1 = !led1;
-        printf("Data read from channel : %u \n\n",sx8650iwltrt.read_channel());
-        printf("Position X : %u \n\n",sx8650iwltrt.read_channel_data());
+        
+        while(!NIRQ){
+            // printf("Data read from channel : %u \n\n",sx8650iwltrt.read_channel());
+            printf("Data : %u \n\n",sx8650iwltrt.read_channel_data());
+        }
 
         ThisThread::sleep_for(PERIOD_MS);
 
