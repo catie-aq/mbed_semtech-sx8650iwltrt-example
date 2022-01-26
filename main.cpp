@@ -16,12 +16,18 @@ namespace {
 /* Definitions PIN */
 static SX8650IWLTRT sx8650iwltrt(I2C1_SDA, I2C1_SCL);
 static DigitalOut led1(LED1);
-static InteruptIn NIRQ(DIO18);
+InterruptIn nirq(DIO5);
 SWO swo;
+volatile bool nirq_p(false);
+
+void nirq_fall(){
+    nirq_p = true;   
+}
 
 
 int main()
 {
+    nirq.fall(nirq_fall);
     printf("--------------------------------------\n\n");
     printf("SX8650IWLTRT library example\n\n");
     ThisThread::sleep_for(BMA280_SWITCHED_TIME);
@@ -29,11 +35,9 @@ int main()
     printf("Soft Reset done\n\n");
     printf("Default Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
     sx8650iwltrt.set_condirq(RegCtrl1Address::CONDIRQ);
-    sx8650iwltrt.set_rate(Rate::RATE_2K_cps);
     sx8650iwltrt.set_mode(Mode::PenTrg);
     printf("SX8650IWLTRT in Automatic mode\n\n");
     printf("Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
-    // printf("Status CONDIRQ Interrupt : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.condirq()));
     printf("Status CONVIRQ Interrupt : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.convirq()));
 
     while(1){
@@ -41,9 +45,11 @@ int main()
         printf("Enter in loop \n\n");
         led1 = !led1;
         
-        while(!NIRQ){
+        if(nirq_p){
+            nirq_p = false;
             // printf("Data read from channel : %u \n\n",sx8650iwltrt.read_channel());
             printf("Data : %u \n\n",sx8650iwltrt.read_channel_data());
+            
         }
 
         ThisThread::sleep_for(PERIOD_MS);
