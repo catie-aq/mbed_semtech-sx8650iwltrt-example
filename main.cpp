@@ -4,7 +4,7 @@
  */
 #include "mbed.h"
 #include "sx8650iwltrt.h"
-#include "swo.h"
+// #include "swo.h"
 
 using namespace sixtron;
 
@@ -17,43 +17,40 @@ namespace {
 static SX8650IWLTRT sx8650iwltrt(I2C1_SDA, I2C1_SCL);
 static DigitalOut led1(LED1);
 InterruptIn nirq(DIO5);
-SWO swo;
-volatile bool nirq_p(false);
+EventQueue queue(32 * EVENTS_EVENT_SIZE);
+Thread t;
+
+
 
 void nirq_fall(){
-    nirq_p = true;   
+    printf("-----------------\n\n");
+    printf("X : %u | Y : %u \n\n",sx8650iwltrt.read_channel_x(),sx8650iwltrt.read_channel_y());
+    printf("-----------------\n\n");
+    led1 = !led1;   
 }
 
 
 int main()
 {
-    nirq.fall(nirq_fall);
+    t.start(callback(&queue, &EventQueue::dispatch_forever));
+    
+
     printf("--------------------------------------\n\n");
     printf("SX8650IWLTRT library example\n\n");
+    
     ThisThread::sleep_for(BMA280_SWITCHED_TIME);
     sx8650iwltrt.soft_reset();
+    
     printf("Soft Reset done\n\n");
     printf("Default Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
+    
     sx8650iwltrt.set_condirq(RegCtrl1Address::CONDIRQ);
     sx8650iwltrt.set_mode(Mode::PenTrg);
+    
     printf("SX8650IWLTRT in Automatic mode\n\n");
     printf("Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
     printf("Status CONVIRQ Interrupt : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.convirq()));
-
-    while(1){
-        printf("-----------------\n\n");
-        printf("Enter in loop \n\n");
-        led1 = !led1;
-        
-        if(nirq_p){
-            nirq_p = false;
-            // printf("Data read from channel : %u \n\n",sx8650iwltrt.read_channel());
-            printf("Data : %u \n\n",sx8650iwltrt.read_channel_data());
-            
-        }
-
-        ThisThread::sleep_for(PERIOD_MS);
-
-    }
+    
+    nirq.fall(queue.event(nirq_fall));
     return 0;
 }
