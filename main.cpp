@@ -1,57 +1,74 @@
-/*
- * Copyright (c) 2021, CATIE
+/* mbed Microcontroller Library
+ * Copyright (c) 2020 ARM Limited
  * SPDX-License-Identifier: Apache-2.0
  */
+
+#include "ili9163c.h"
 #include "mbed.h"
 #include "sx8650iwltrt.h"
-// #include "swo.h"
 
 using namespace sixtron;
 
-namespace {
-#define BMA280_SWITCHED_TIME 5ms
-#define PERIOD_MS 500ms
-}
-
-/* Definitions PIN */
-static SX8650IWLTRT sx8650iwltrt(I2C1_SDA, I2C1_SCL);
+static SPI spi(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
+ILI9163C display(&spi, SPI1_CS, DIO18, PWM1_OUT);
 static DigitalOut led1(LED1);
-InterruptIn nirq(DIO5);
-EventQueue queue(32 * EVENTS_EVENT_SIZE);
-Thread t;
+Thread thread;
+static EventQueue event_queue;
 
+/* Driver Touchscreen */
+#define BMA280_SWITCHED_TIME 5ms
+static SX8650IWLTRT sx8650iwltrt(I2C1_SDA, I2C1_SCL,&event_queue, I2CAddress::Address2);
 
+void draw_cross(uint8_t x, uint8_t y)
+{
+    display.clearScreen(0);
 
-void nirq_fall(){
-    sx8650iwltrt.read_channel();
-    printf("-----------------\n\n");
-    printf("X : %u | Y : %u \n\n",sx8650iwltrt.coordinates.x,sx8650iwltrt.coordinates.y);
-    printf("-----------------\n\n");
-    led1 = !led1;   
+    static uint16_t buf[21 * 21] = { 0 };
+
+    display.setAddr(x - 10, y - 10, x + 10, y + 10);
+
+    for (int i = 0; i < 21; i++) {
+        if (i == 10) {
+            for (int j = 0; j < 21; j++) {
+                buf[i * 21 + j] = 0xFFFF;
+            }
+        } else {
+            buf[i * 21 + 10] = 0xFFFF;
+        }
+    }
+
+    display.write_data_16(buf, 21 * 21);
 }
+
+void draw(uint16_t x, uint16_t y)
+{
+    uint16_t buf = 0x1234;
+    display.setAddr(x, y, x, y);
+    display.write_data_16(&buf, 1);
+}
+
+void read_coordinates(uint16_t x, uint16_t y){
+    printf("-----------------\n\n");
+    printf("X : %u | Y : %u \n\n",x,y);
+}
+
 
 
 int main()
 {
-    t.start(callback(&queue, &EventQueue::dispatch_forever));
-    
-
-    printf("--------------------------------------\n\n");
-    printf("SX8650IWLTRT library example\n\n");
-    
+    printf("Start App\n");
+    display.init();
+    thread.start(callback(&event_queue, &EventQueue::dispatch_forever));        
+    /*Initialize touchscreen component*/
     ThisThread::sleep_for(BMA280_SWITCHED_TIME);
     sx8650iwltrt.soft_reset();
-    
-    printf("Soft Reset done\n\n");
-    printf("Default Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
-    sx8650iwltrt.set_rate(Rate::RATE_20_cps);
-    sx8650iwltrt.set_condirq(RegCtrl1Address::CONDIRQ);
     sx8650iwltrt.set_mode(Mode::PenTrg);
+
+    sx8650iwltrt.calibrate(draw_cross);
+    sx8650iwltrt.attach(draw);
     
-    printf("SX8650IWLTRT in Automatic mode\n\n");
-    printf("Rate Component : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.rate()));
-    printf("Status CONVIRQ Interrupt : %u cps\n\n",static_cast<uint8_t>(sx8650iwltrt.convirq()));
-    
-    nirq.fall(queue.event(nirq_fall));
-    return 0;
+    while (true) {
+        led1 = !led1;
+        ThisThread::sleep_for(100ms);
+    }
 }
