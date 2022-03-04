@@ -72,11 +72,11 @@ int main()
     sx8650iwltrt.soft_reset();
     sx8650iwltrt.set_mode(Mode::PenTrg);
     sx8650iwltrt.set_rate(Rate::RATE_200_cps);
-    
+
     // sx8650iwltrt.enable_pressures_measurement();
     sx8650iwltrt.enable_coordinates_measurement();
     // read_coordinate = true;
-    
+
     sx8650iwltrt.calibrate(draw_cross);
     if (read_coordinate) {
         sx8650iwltrt.attach_coordinates_measurement(read_coordinates);
