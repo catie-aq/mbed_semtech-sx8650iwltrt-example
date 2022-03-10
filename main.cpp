@@ -3,23 +3,52 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "BlockDevice.h"
+#include "FATFileSystem.h"
+#include "FlashIAPBlockDevice.h"
 #include "ili9163c.h"
 #include "mbed.h"
 #include "sx8650iwltrt.h"
 
 using namespace sixtron;
 
-static SPI spi(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
-ILI9163C display(&spi, SPI1_CS, DIO18, PWM1_OUT);
-static DigitalOut led1(LED1);
-Thread thread;
-static EventQueue event_queue;
-static InterruptIn button(BUTTON1);
-bool read_coordinate(false);
+#define FLASH_ENABLE 1 // state of led flash during the capture
+#define FLASHIAP_ADDRESS 0x08055000 // 0x0800000 + 350 kB
+#define FLASHIAP_SIZE 0x70000 // 0x61A80    // 460 kB
+
+#define VALUE_ACCURACY_X 7 * 128 / 100
+#define VALUE_ACCURACY_Y 7 * 180 / 100
 
 /* Driver Touchscreen */
 #define BMA280_SWITCHED_TIME 5ms
+
+// Protoypes
+void application_setup(void);
+void application(void);
+void draw_cross(uint8_t x, uint8_t y);
+void draw(uint16_t x, uint16_t y);
+void read_coordinates(uint16_t x, uint16_t y);
+void read_pressures(uint16_t z1, uint16_t z2);
+
+// RTOS
+Thread thread;
+static EventQueue event_queue;
+
+// Preipherals
 static SX8650IWLTRT sx8650iwltrt(I2C1_SDA, I2C1_SCL, &event_queue, I2CAddress::Address2);
+static SPI spi(SPI1_MOSI, SPI1_MISO, SPI1_SCK);
+ILI9163C display(&spi, SPI1_CS, DIO18, PWM1_OUT);
+static DigitalOut led1(LED1);
+static InterruptIn button(BUTTON1);
+
+// Create flash IAP block device
+BlockDevice *bd = new FlashIAPBlockDevice(FLASHIAP_ADDRESS, FLASHIAP_SIZE);
+
+// FlashIAPBlockDevice bd(FLASHIAP_ADDRESS, FLASHIAP_SIZE);
+FATFileSystem fs("fs");
+
+// Variables
+bool correct_calibrate(false);
 
 void draw_cross(uint8_t x, uint8_t y)
 {
@@ -61,6 +90,38 @@ void read_pressure(uint16_t z1, uint16_t z2)
     printf("Z1 : %u | Z2 : %u \n\n", z1, z2);
 }
 
+void application_setup(void)
+{
+
+    // Initialize the flash IAP block device and print the memory layout
+    bd->init();
+    printf("Flash block device size: %llu\n", bd->size());
+    printf("Flash block device read size: %llu\n", bd->get_read_size());
+    printf("Flash block device program size: %llu\n", bd->get_program_size());
+    printf("Flash block device erase size: %llu\n", bd->get_erase_size());
+
+    printf("Mounting the filesystem... ");
+    fflush(stdout);
+    int err = fs.mount(bd);
+
+    // fs.format(bd);
+
+    printf("%s\n", (err ? "Fail :(" : "OK"));
+    if (err) {
+        // Reformat if we can't mount the filesystem
+        // this should only happen on the first boot
+        printf("No filesystem found, formatting... ");
+        fflush(stdout);
+        err = fs.reformat(bd);
+        printf("%s\n", (err ? "Fail :(" : "OK"));
+        if (err) {
+            error("error: %s (%d)\n", strerror(-err), err);
+        }
+    }
+
+    // fs.unmount();
+}
+
 int main()
 {
     printf("Start App\n\n");
@@ -72,19 +133,63 @@ int main()
     sx8650iwltrt.soft_reset();
     sx8650iwltrt.set_mode(Mode::PenTrg);
     sx8650iwltrt.set_rate(Rate::RATE_200_cps);
+    sx8650iwltrt.set_powdly(Time::DLY_2_2US);
+
+    char *buffer = (char *)malloc(bd->get_erase_size());
 
     // sx8650iwltrt.enable_pressures_measurement();
     sx8650iwltrt.enable_coordinates_measurement();
-    // read_coordinate = true;
 
-    sx8650iwltrt.calibrate(draw_cross);
-    if (read_coordinate) {
+    // double ax = (double)strtod(buffer);
+    // double bx = (double)strtod(buffer);
+    // double x_off = (double)strtod(buffer);           
+    // double ay = (double)strtod(buffer);
+    // double by = (double)strtod(buffer);
+    // double y_off = (double)strtod(buffer);
+
+    // sx8650iwltrt.set_calibration(ax, bx, x_off, ay, by, y_off);
+
+    // application setup
+    application_setup();
+
+    while (!correct_calibrate) {
+        draw_cross(64, 80);
         sx8650iwltrt.attach_coordinates_measurement(read_coordinates);
-    } else {
-        sx8650iwltrt.attach_coordinates_measurement(draw);
+        ThisThread::sleep_for(2000ms);
+        if ((64 + VALUE_ACCURACY_X > sx8650iwltrt._coordinates.x
+                    && sx8650iwltrt._coordinates.x > 64 - VALUE_ACCURACY_X)
+                && (80 + VALUE_ACCURACY_Y > sx8650iwltrt._coordinates.y
+                        && sx8650iwltrt._coordinates.y > 80 - VALUE_ACCURACY_Y)) {
+            correct_calibrate = true;
+            printf("Calibrate done correctly ! \n\n");
+        } else {
+            sx8650iwltrt.calibrate(draw_cross);
+            printf("Calibrate again ! \n\n");
+        }
+        display.clearScreen(0);
     }
 
+    sx8650iwltrt.attach_coordinates_measurement(draw);
     sx8650iwltrt.attach_pressures_measurement(read_pressure);
+
+    // // Write "Hello World!" to the first block
+    // sprintf(buffer,
+    //         "%f %f %f %f %f %f \n\n",
+    //         sx8650iwltrt._coefficient.ax,
+    //         sx8650iwltrt._coefficient.bx,
+    //         sx8650iwltrt._coefficient.x_off,
+    //         sx8650iwltrt._coefficient.ay,
+    //         sx8650iwltrt._coefficient.by,
+    //         sx8650iwltrt._coefficient.y_off);
+    // bd.erase(0, bd.get_erase_size());
+    // bd.program(buffer, 0, bd.get_erase_size());
+
+    // // Read back what was stored
+    // bd.read(buffer, 0, bd.get_erase_size());
+    // printf("%s", buffer);
+
+    // Deinitialize the device
+    // bd.deinit();
 
     while (true) {
         led1 = !led1;
