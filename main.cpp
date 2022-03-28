@@ -9,6 +9,7 @@
 #include "ili9163c.h"
 #include "mbed.h"
 #include "sx8650iwltrt.h"
+#include <errno.h>
 
 using namespace sixtron;
 
@@ -29,6 +30,8 @@ void draw_cross(uint8_t x, uint8_t y);
 void draw(uint16_t x, uint16_t y);
 void read_coordinates(uint16_t x, uint16_t y);
 void read_pressures(uint16_t z1, uint16_t z2);
+void retrieve_calibrate_data(char *bufer);
+void save_calibrate_date(char *buffer);
 
 // RTOS
 Thread thread;
@@ -44,7 +47,6 @@ static InterruptIn button(BUTTON1);
 // Create flash IAP block device
 BlockDevice *bd = new FlashIAPBlockDevice(FLASHIAP_ADDRESS, FLASHIAP_SIZE);
 
-// FlashIAPBlockDevice bd(FLASHIAP_ADDRESS, FLASHIAP_SIZE);
 FATFileSystem fs("fs");
 
 // Variables
@@ -104,8 +106,6 @@ void application_setup(void)
     fflush(stdout);
     int err = fs.mount(bd);
 
-    // fs.format(bd);
-
     printf("%s\n", (err ? "Fail :(" : "OK"));
     if (err) {
         // Reformat if we can't mount the filesystem
@@ -118,13 +118,107 @@ void application_setup(void)
             error("error: %s (%d)\n", strerror(-err), err);
         }
     }
+}
 
-    // fs.unmount();
+void retrieve_calibrate_data(char *buffer)
+{
+    // Open the file
+    printf("Opening \"/fs/calibration.csv\"... ");
+    fflush(stdout);
+    FILE *f = fopen("/fs/calibration.csv", "r+");
+    printf("%s\n", (!f ? "Fail :(" : "OK"));
+    if (!f) {
+        // Create the file if it doesn't exist
+        printf("No file found, creating a new file... ");
+        fflush(stdout);
+        f = fopen("/fs/calibration.csv", "w+");
+        printf("%s\n", (!f ? "Fail :(" : "OK"));
+        if (!f) {
+            error("error: %s (%d)\n", strerror(errno), -errno);
+        }
+    }
+    double ax, bx, x_off, ay, by, y_off;
+    bd->read(buffer, 0, bd->get_erase_size());
+    scanf("%f,%f,%f,%f,%f,%f", &ax, &bx, &x_off, &ay, &by, &y_off);
+    printf("%s", buffer);
+    sx8650iwltrt.set_calibration(ax, bx, x_off, ay, by, y_off);
+
+    fclose(f);
+
+    // Display the root directory
+    printf("Opening the root directory... ");
+    fflush(stdout);
+    DIR *d = opendir("/fs/");
+    printf("%s\n", (!d ? "Fail :(" : "OK"));
+    if (!d) {
+        error("error: %s (%d)\n", strerror(errno), -errno);
+    }
+
+    printf("root directory:\n");
+    while (true) {
+        struct dirent *e = readdir(d);
+        if (!e) {
+            break;
+        }
+
+        printf("    %s\n", e->d_name);
+    }
+}
+
+void save_calibrate_date(char *buffer)
+{
+    // Open the file
+    printf("Opening \"/fs/calibration.csv\"... ");
+    fflush(stdout);
+    FILE *f = fopen("/fs/calibration.csv", "r+");
+    printf("%s\n", (!f ? "Fail :(" : "OK"));
+    if (!f) {
+        // Create the file if it doesn't exist
+        printf("No file found, creating a new file... ");
+        fflush(stdout);
+        f = fopen("/fs/calibration.csv", "w+");
+        printf("%s\n", (!f ? "Fail :(" : "OK"));
+        if (!f) {
+            error("error: %s (%d)\n", strerror(errno), -errno);
+        }
+    }
+    sprintf(buffer,
+            "%f,%f,%f,%f,%f,%f \n\n",
+            sx8650iwltrt._coefficient.ax,
+            sx8650iwltrt._coefficient.bx,
+            sx8650iwltrt._coefficient.x_off,
+            sx8650iwltrt._coefficient.ay,
+            sx8650iwltrt._coefficient.by,
+            sx8650iwltrt._coefficient.y_off);
+    bd->erase(0, bd->get_erase_size());
+    bd->program(buffer, 0, bd->get_erase_size());
+
+    fclose(f);
+
+    // Display the root directory
+    printf("Opening the root directory... ");
+    fflush(stdout);
+    DIR *d = opendir("/fs/");
+    printf("%s\n", (!d ? "Fail :(" : "OK"));
+    if (!d) {
+        error("error: %s (%d)\n", strerror(errno), -errno);
+    }
+
+    printf("root directory:\n");
+    while (true) {
+        struct dirent *e = readdir(d);
+        if (!e) {
+            break;
+        }
+
+        printf("    %s\n", e->d_name);
+    }
 }
 
 int main()
 {
     printf("Start App\n\n");
+
     display.init();
     display.clearScreen(0);
     thread.start(callback(&event_queue, &EventQueue::dispatch_forever));
@@ -135,23 +229,17 @@ int main()
     sx8650iwltrt.set_rate(Rate::RATE_200_cps);
     sx8650iwltrt.set_powdly(Time::DLY_2_2US);
 
-    char *buffer = (char *)malloc(bd->get_erase_size());
-
     // sx8650iwltrt.enable_pressures_measurement();
     sx8650iwltrt.enable_coordinates_measurement();
 
-    // double ax = (double)strtod(buffer);
-    // double bx = (double)strtod(buffer);
-    // double x_off = (double)strtod(buffer);           
-    // double ay = (double)strtod(buffer);
-    // double by = (double)strtod(buffer);
-    // double y_off = (double)strtod(buffer);
-
-    // sx8650iwltrt.set_calibration(ax, bx, x_off, ay, by, y_off);
-
     // application setup
     application_setup();
+    char *buffer = (char *)malloc(bd->get_erase_size());
 
+    if (sx8650iwltrt._coefficient.ax != 2.00) {
+        retrieve_calibrate_data(buffer);
+        correct_calibrate = true;
+    }
     while (!correct_calibrate) {
         draw_cross(64, 80);
         sx8650iwltrt.attach_coordinates_measurement(read_coordinates);
@@ -161,6 +249,7 @@ int main()
                 && (80 + VALUE_ACCURACY_Y > sx8650iwltrt._coordinates.y
                         && sx8650iwltrt._coordinates.y > 80 - VALUE_ACCURACY_Y)) {
             correct_calibrate = true;
+            save_calibrate_date(buffer);
             printf("Calibrate done correctly ! \n\n");
         } else {
             sx8650iwltrt.calibrate(draw_cross);
@@ -171,25 +260,12 @@ int main()
 
     sx8650iwltrt.attach_coordinates_measurement(draw);
     sx8650iwltrt.attach_pressures_measurement(read_pressure);
-
-    // // Write "Hello World!" to the first block
-    // sprintf(buffer,
-    //         "%f %f %f %f %f %f \n\n",
-    //         sx8650iwltrt._coefficient.ax,
-    //         sx8650iwltrt._coefficient.bx,
-    //         sx8650iwltrt._coefficient.x_off,
-    //         sx8650iwltrt._coefficient.ay,
-    //         sx8650iwltrt._coefficient.by,
-    //         sx8650iwltrt._coefficient.y_off);
-    // bd.erase(0, bd.get_erase_size());
-    // bd.program(buffer, 0, bd.get_erase_size());
-
-    // // Read back what was stored
-    // bd.read(buffer, 0, bd.get_erase_size());
-    // printf("%s", buffer);
+    
+    bd->read(buffer, 0, bd->get_erase_size());
+    printf("%s", buffer);
 
     // Deinitialize the device
-    // bd.deinit();
+    bd->deinit();
 
     while (true) {
         led1 = !led1;
