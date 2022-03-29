@@ -6,6 +6,7 @@
 #include "BlockDevice.h"
 #include "FATFileSystem.h"
 #include "FlashIAPBlockDevice.h"
+#include "USBMSD.h"
 #include "ili9163c.h"
 #include "mbed.h"
 #include "sx8650iwltrt.h"
@@ -14,7 +15,7 @@
 using namespace sixtron;
 
 #define FLASH_ENABLE 1 // state of led flash during the capture
-#define FLASHIAP_ADDRESS 0x08055000 // 0x0800000 + 350 kB
+#define FLASHIAP_ADDRESS 0x08080000
 #define FLASHIAP_SIZE 0x70000 // 0x61A80    // 460 kB
 
 #define VALUE_ACCURACY_X 7 * 128 / 100
@@ -46,7 +47,6 @@ static InterruptIn button(BUTTON1);
 
 // Create flash IAP block device
 BlockDevice *bd = new FlashIAPBlockDevice(FLASHIAP_ADDRESS, FLASHIAP_SIZE);
-
 FATFileSystem fs("fs");
 
 // Variables
@@ -82,8 +82,8 @@ void draw(uint16_t x, uint16_t y)
 
 void read_coordinates(uint16_t x, uint16_t y)
 {
-    printf("-----------------\n\n");
-    printf("X : %u | Y : %u \n\n", x, y);
+    // printf("-----------------\n\n");
+    // printf("X : %u | Y : %u \n\n", x, y);
 }
 
 void read_pressure(uint16_t z1, uint16_t z2)
@@ -102,7 +102,7 @@ void application_setup(void)
     printf("Flash block device program size: %llu\n", bd->get_program_size());
     printf("Flash block device erase size: %llu\n", bd->get_erase_size());
 
-    printf("Mounting the filesystem... ");
+    printf("Mounting the filesystem... \n");
     fflush(stdout);
     int err = fs.mount(bd);
 
@@ -123,24 +123,15 @@ void application_setup(void)
 void retrieve_calibrate_data(char *buffer)
 {
     // Open the file
-    printf("Opening \"/fs/calibration.csv\"... ");
+    printf("Opening \"/fs/calibration.txt\"... ");
     fflush(stdout);
-    FILE *f = fopen("/fs/calibration.csv", "r+");
+    FILE *f = fopen("/fs/calibration.txt", "r");
     printf("%s\n", (!f ? "Fail :(" : "OK"));
-    if (!f) {
-        // Create the file if it doesn't exist
-        printf("No file found, creating a new file... ");
-        fflush(stdout);
-        f = fopen("/fs/calibration.csv", "w+");
-        printf("%s\n", (!f ? "Fail :(" : "OK"));
-        if (!f) {
-            error("error: %s (%d)\n", strerror(errno), -errno);
-        }
-    }
-    double ax, bx, x_off, ay, by, y_off;
-    bd->read(buffer, 0, bd->get_erase_size());
-    scanf("%f,%f,%f,%f,%f,%f", &ax, &bx, &x_off, &ay, &by, &y_off);
-    printf("%s", buffer);
+
+    float ax, bx, x_off, ay, by, y_off;
+    fscanf(f, "%f %f %f %f %f %f", &ax, &bx, &x_off, &ay, &by, &y_off);
+    // printf("%f %f %f %f %f %f \n", ax, bx, x_off, ay, by, y_off);
+
     sx8650iwltrt.set_calibration(ax, bx, x_off, ay, by, y_off);
 
     fclose(f);
@@ -168,30 +159,30 @@ void retrieve_calibrate_data(char *buffer)
 void save_calibrate_date(char *buffer)
 {
     // Open the file
-    printf("Opening \"/fs/calibration.csv\"... ");
+    printf("Opening \"/fs/calibration.txt\"... ");
     fflush(stdout);
-    FILE *f = fopen("/fs/calibration.csv", "r+");
+    FILE *f = fopen("/fs/calibration.txt", "r+");
     printf("%s\n", (!f ? "Fail :(" : "OK"));
     if (!f) {
         // Create the file if it doesn't exist
         printf("No file found, creating a new file... ");
         fflush(stdout);
-        f = fopen("/fs/calibration.csv", "w+");
+        f = fopen("/fs/calibration.txt", "w+");
         printf("%s\n", (!f ? "Fail :(" : "OK"));
         if (!f) {
             error("error: %s (%d)\n", strerror(errno), -errno);
         }
     }
     sprintf(buffer,
-            "%f,%f,%f,%f,%f,%f \n\n",
+            "%f %f %f %f %f %f",
             sx8650iwltrt._coefficient.ax,
             sx8650iwltrt._coefficient.bx,
             sx8650iwltrt._coefficient.x_off,
             sx8650iwltrt._coefficient.ay,
             sx8650iwltrt._coefficient.by,
             sx8650iwltrt._coefficient.y_off);
-    bd->erase(0, bd->get_erase_size());
-    bd->program(buffer, 0, bd->get_erase_size());
+
+    fwrite(buffer, 1, strlen(buffer), f);
 
     fclose(f);
 
@@ -234,12 +225,35 @@ int main()
 
     // application setup
     application_setup();
+    printf("\nActual value of ax : %f \n\n", sx8650iwltrt._coefficient.ax);
     char *buffer = (char *)malloc(bd->get_erase_size());
 
-    if (sx8650iwltrt._coefficient.ax != 2.00) {
+    // Open the file
+    printf("Opening \"/fs/calibration.txt\"... ");
+    fflush(stdout);
+    FILE *f = fopen("/fs/calibration.txt", "r+");
+    printf("%s\n", (!f ? "Fail :(" : "OK"));
+    if (!f) {
+        // Create the file if it doesn't exist
+        printf("No file found, creating a new file... ");
+        fflush(stdout);
+        f = fopen("/fs/calibration.txt", "w+");
+        printf("%s\n", (!f ? "Fail :(" : "OK"));
+        if (!f) {
+            error("error: %s (%d)\n", strerror(errno), -errno);
+        }
+    }
+
+    float ax;
+    fscanf(f, "%f", &ax);
+    
+    fclose(f);
+
+    if (ax != sx8650iwltrt._coefficient.ax && ax != 0) {
         retrieve_calibrate_data(buffer);
         correct_calibrate = true;
     }
+
     while (!correct_calibrate) {
         draw_cross(64, 80);
         sx8650iwltrt.attach_coordinates_measurement(read_coordinates);
@@ -248,27 +262,24 @@ int main()
                     && sx8650iwltrt._coordinates.x > 64 - VALUE_ACCURACY_X)
                 && (80 + VALUE_ACCURACY_Y > sx8650iwltrt._coordinates.y
                         && sx8650iwltrt._coordinates.y > 80 - VALUE_ACCURACY_Y)) {
+            printf("Calibrate done correctly ! \n\n");
             correct_calibrate = true;
             save_calibrate_date(buffer);
-            printf("Calibrate done correctly ! \n\n");
         } else {
+            printf("Calibrate again ! \n");
             sx8650iwltrt.calibrate(draw_cross);
-            printf("Calibrate again ! \n\n");
         }
         display.clearScreen(0);
     }
 
     sx8650iwltrt.attach_coordinates_measurement(draw);
     sx8650iwltrt.attach_pressures_measurement(read_pressure);
-    
-    bd->read(buffer, 0, bd->get_erase_size());
-    printf("%s", buffer);
 
-    // Deinitialize the device
-    bd->deinit();
+    printf("\nValue after calibration of ax : %f \n\n", sx8650iwltrt._coefficient.ax);
+
+    USBMSD usb(bd);
 
     while (true) {
-        led1 = !led1;
-        ThisThread::sleep_for(100ms);
+        usb.process();
     }
 }
