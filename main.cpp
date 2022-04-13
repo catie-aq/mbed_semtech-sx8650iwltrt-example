@@ -22,7 +22,7 @@ using namespace sixtron;
 #define VALUE_ACCURACY_Y 7 * 180 / 100
 
 /* Driver Touchscreen */
-#define BMA280_SWITCHED_TIME 5ms
+#define SX8650_SWITCHED_TIME 5ms
 
 // Protoypes
 void application_setup(void);
@@ -214,7 +214,7 @@ int main()
     display.clearScreen(0);
     thread.start(callback(&event_queue, &EventQueue::dispatch_forever));
     /*Initialize touchscreen component*/
-    ThisThread::sleep_for(BMA280_SWITCHED_TIME);
+    ThisThread::sleep_for(SX8650_SWITCHED_TIME);
     sx8650iwltrt.soft_reset();
     sx8650iwltrt.set_mode(Mode::PenTrg);
     sx8650iwltrt.set_rate(Rate::RATE_200_cps);
